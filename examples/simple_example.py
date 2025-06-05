@@ -6,37 +6,44 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt 
 from mlreserving import MLReserving
+from sklearn.ensemble import ExtraTreesRegressor
+from sklearn.linear_model import RidgeCV
 
 # Load the dataset
-url = "https://raw.githubusercontent.com/Techtonique/datasets/refs/heads/main/tabular/triangle/abc.csv"
+url = "https://raw.githubusercontent.com/Techtonique/datasets/refs/heads/main/tabular/triangle/genins.csv"
 df = pd.read_csv(url)
 
 print(df.head())
 print(df.tail())
 
-# Initialize the model with prediction intervals
-model = MLReserving(
-    level=95,  # 95% confidence level
-    #replications=250,  # number of replications for simulation
-    #type_pi="bootstrap",  # use bootstrap for prediction intervals
-    random_state=42
-)
+models = [RidgeCV(), ExtraTreesRegressor()]
 
-# Fit the model
-model.fit(df, origin_col="origin", development_col="development", value_col="values")
+for mdl in models: 
+    # Initialize the model with prediction intervals
+    model = MLReserving(model=mdl,
+        level=95,  # 95% confidence level
+        random_state=42
+    )
 
-# Make predictions with intervals
-result = model.predict()
+    # Fit the model
+    model.fit(df, origin_col="origin", development_col="development", value_col="values")
 
-# Display results
-print("\nMean predictions:")
-result.mean.plot()
-plt.show()
+    # Make predictions with intervals
+    result = model.predict()
 
-print("\nLower bound (95%):")
-result.lower.plot()
-plt.show()
+    print("result.mean", result.mean)
+    print("result.lower", result.lower)
+    print("result.upper", result.upper)
 
-print("\nUpper bound (95%):")
-result.upper.plot()
-plt.show()
+    # Display results
+    print("\nMean predictions:")
+    result.mean.plot()
+    plt.show()
+
+    print("\nLower bound (95%):")
+    result.lower.plot()
+    plt.show()
+
+    print("\nUpper bound (95%):")
+    result.upper.plot()
+    plt.show()

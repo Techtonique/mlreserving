@@ -8,15 +8,16 @@ from collections import namedtuple
 from copy import deepcopy
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import RidgeCV
+from sklearn.preprocessing import StandardScaler
 from nnetsauce import PredictionInterval
 
 def arcsinh(x):
-    """Arcsinh transformation"""
-    return np.arcsinh(x)
+    """Arcsinh transformation with offset for zero values"""
+    return np.arcsinh(x + 1)
 
 def inv_arcsinh(x):
-    """Inverse arcsinh transformation"""
-    return np.sinh(x)
+    """Inverse arcsinh transformation with offset"""
+    return np.sinh(x) - 1
 
 class MLReserving:
     """
@@ -64,6 +65,7 @@ class MLReserving:
         self.full_data_upper_ = None 
         self.full_data_lower_ = None 
         self.full_data_sims_ = []
+        self.scaler = StandardScaler()
         
     def fit(self, data, origin_col="origin", 
             development_col="development", 
@@ -125,8 +127,6 @@ class MLReserving:
         
         full_data["to_predict"] = full_data[value_col].isna()
 
-        print("full_data", full_data)
-
         self.full_data_ = deepcopy(full_data)
         self.full_data_lower_ = deepcopy(full_data)
         self.full_data_upper_ = deepcopy(full_data)
@@ -134,12 +134,18 @@ class MLReserving:
         train_data = full_data[~full_data["to_predict"]]
         test_data = full_data[full_data["to_predict"]]
         
-        # Use transformed features for training
-        X_train = train_data[["log_origin", "log_dev", "log_calendar"]].values
+        # Prepare features for training
+        feature_cols = ["log_origin", "log_dev", "log_calendar"]
+        X_train = train_data[feature_cols].values
+        X_test = test_data[feature_cols].values
+        
+        # Scale features
+        X_train_scaled = self.scaler.fit_transform(X_train)
+        self.X_test_ = self.scaler.transform(X_test)
+        
         y_train = train_data[f"arcsinh_{value_col}"].values
-        self.X_test_ = test_data[["log_origin", "log_dev", "log_calendar"]].values
 
-        self.model.fit(X_train, y_train)
+        self.model.fit(X_train_scaled, y_train)
         
         return self
     
@@ -163,9 +169,18 @@ class MLReserving:
 
         if self.type_pi is None: 
             # Transform predictions back to original scale
-            self.full_data_.loc[to_predict, self.value_col] = inv_arcsinh(preds.mean)
-            self.full_data_lower_.loc[to_predict, self.value_col] = inv_arcsinh(preds.lower)
-            self.full_data_upper_.loc[to_predict, self.value_col] = inv_arcsinh(preds.upper)
+            mean_pred = inv_arcsinh(preds.mean)
+            lower_pred = inv_arcsinh(preds.lower)
+            upper_pred = inv_arcsinh(preds.upper)
+            
+            # Ensure predictions are non-negative
+            mean_pred = np.maximum(mean_pred, 0)
+            lower_pred = np.maximum(lower_pred, 0)
+            upper_pred = np.maximum(upper_pred, 0)
+            
+            self.full_data_.loc[to_predict, self.value_col] = mean_pred
+            self.full_data_lower_.loc[to_predict, self.value_col] = lower_pred
+            self.full_data_upper_.loc[to_predict, self.value_col] = upper_pred
 
             DescribeResult = namedtuple("DescribeResult", ("mean", "lower", "upper"))
             return DescribeResult(self.full_data_.pivot(index=self.origin_col, 
