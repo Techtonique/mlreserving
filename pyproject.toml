@@ -1,0 +1,25 @@
+[project]
+name = "mlreserving"
+version = "0.1.0"
+description = "Model-agnostic Probabilistic Machine Learning Reserving"
+requires-python = ">=3.7"
+authors = [
+    {name = "T. Moudiki", email = "thierry.moudiki@gmail.com"},
+]
+dependencies = [
+    "nnetsauce",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: OS Independent",
+]
+readme = "README.md"
+
+[project.urls]
+Repository = "https://github.com/Techtonique/mlreserving"
+
+[build-system]
+requires = ["setuptools>=61.0", "nnetsauce"]
+build-backend = "setuptools.build_meta"
