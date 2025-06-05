@@ -96,15 +96,17 @@ class MLReserving:
         
         df = data.copy()
                 
-        df["dev"] = df[development_col] - df[origin_col]
+        df["dev"] = df[development_col] - df[origin_col] + 1
         
         self.max_dev = df["dev"].max()
         self.origin_years = df[origin_col].unique()
         
         full_grid = pd.MultiIndex.from_product(
-            [self.origin_years, range(self.max_dev)],
+            [self.origin_years, range(1, self.max_dev + 1)],
             names=[origin_col, "dev"]
         ).to_frame(index=False)
+
+        print("full_grid", full_grid)
         
         full_data = pd.merge(
             full_grid, 
@@ -112,12 +114,14 @@ class MLReserving:
             on=[origin_col, "dev"], 
             how="left"
         )
+
+        print("full_data", full_data)
         
-        full_data["calendar"] = full_data[origin_col] + full_data["dev"]
+        full_data["calendar"] = full_data[origin_col] + full_data["dev"] - 1
         
         # Apply transformations
         full_data["log_origin"] = np.log(full_data[origin_col])
-        full_data["log_dev"] = np.log(full_data["dev"] + 1)  # +1 to handle dev=0
+        full_data["log_dev"] = np.log(full_data["dev"])  # +1 to handle dev=0
         full_data["log_calendar"] = np.log(full_data["calendar"])
         
         # Transform response if not NaN
@@ -127,12 +131,18 @@ class MLReserving:
         
         full_data["to_predict"] = full_data[value_col].isna()
 
+        print("Full data shape:", full_data.shape)
+        print("Number of predictions needed:", full_data["to_predict"].sum())
+
         self.full_data_ = deepcopy(full_data)
         self.full_data_lower_ = deepcopy(full_data)
         self.full_data_upper_ = deepcopy(full_data)
         
         train_data = full_data[~full_data["to_predict"]]
         test_data = full_data[full_data["to_predict"]]
+        
+        print("Train data shape:", train_data.shape)
+        print("Test data shape:", test_data.shape)
         
         # Prepare features for training
         feature_cols = ["log_origin", "log_dev", "log_calendar"]
@@ -173,6 +183,9 @@ class MLReserving:
             lower_pred = inv_arcsinh(preds.lower)
             upper_pred = inv_arcsinh(preds.upper)
             
+            print("Mean predictions shape:", mean_pred.shape)
+            print("First few mean predictions:", mean_pred[:5])
+            
             # Ensure predictions are non-negative
             mean_pred = np.maximum(mean_pred, 0)
             lower_pred = np.maximum(lower_pred, 0)
@@ -186,19 +199,28 @@ class MLReserving:
             # Calculate triangles
             mean_triangle = self.full_data_.pivot(index=self.origin_col, 
                                                 columns="dev", 
-                                                values=self.value_col).sort_index().T
+                                                values=self.value_col).sort_index()
             lower_triangle = self.full_data_lower_.pivot(index=self.origin_col, 
                                                        columns="dev", 
-                                                       values=self.value_col).sort_index().T
+                                                       values=self.value_col).sort_index()
             upper_triangle = self.full_data_upper_.pivot(index=self.origin_col, 
                                                        columns="dev", 
-                                                       values=self.value_col).sort_index().T
+                                                       values=self.value_col).sort_index()
+
+            print("\nMean triangle shape:", mean_triangle.shape)
+            print("Mean triangle:\n", mean_triangle)
 
             # Calculate IBNR based on predicted values
             test_data = self.full_data_[to_predict]
+            print("\nTest data shape:", test_data.shape)
+            print("Test data:\n", test_data[[self.origin_col, "dev", self.value_col]].head())
+            
+            # Group by origin year and sum predictions
             ibnr_mean = test_data.groupby(self.origin_col)[self.value_col].sum()
             ibnr_lower = self.full_data_lower_[to_predict].groupby(self.origin_col)[self.value_col].sum()
             ibnr_upper = self.full_data_upper_[to_predict].groupby(self.origin_col)[self.value_col].sum()
+
+            print("\nIBNR mean:\n", ibnr_mean)
 
             DescribeResult = namedtuple("DescribeResult", 
                                       ("mean", "lower", "upper", "ibnr_mean", "ibnr_lower", "ibnr_upper"))

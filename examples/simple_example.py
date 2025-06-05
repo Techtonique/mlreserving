@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 from mlreserving import MLReserving
 from sklearn.ensemble import ExtraTreesRegressor
 from sklearn.linear_model import RidgeCV
+from sklearn.gaussian_process import GaussianProcessRegressor
 
 # Load the dataset
 url = "https://raw.githubusercontent.com/Techtonique/datasets/refs/heads/main/tabular/triangle/genins.csv"
@@ -16,7 +17,7 @@ df = pd.read_csv(url)
 print(df.head())
 print(df.tail())
 
-models = [RidgeCV(), ExtraTreesRegressor()]
+models = [RidgeCV(), ExtraTreesRegressor(), GaussianProcessRegressor()]
 
 for mdl in models: 
     # Initialize the model with prediction intervals
