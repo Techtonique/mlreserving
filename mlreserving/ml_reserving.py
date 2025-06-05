@@ -64,6 +64,13 @@ class MLReserving:
         self.value_col = None
         self.max_dev = None
         self.origin_years = None
+        self.latest_ = None
+        self.ultimate_ = None
+        self.ultimate_lower_ = None
+        self.ultimate_upper_ = None
+        self.ibnr_mean_ = None
+        self.ibnr_lower_ = None
+        self.ibnr_upper_ = None
         self.X_test_ = None 
         self.full_data_ = None 
         self.full_data_upper_ = None 
@@ -120,6 +127,9 @@ class MLReserving:
         )
         
         full_data["calendar"] = full_data[origin_col] + full_data["dev"] - 1
+        
+        # Calculate latest values for each origin year
+        self.latest_ = full_data.groupby(origin_col)[value_col].last()
         
         # Apply transformations
         if self.use_factors:
@@ -225,13 +235,68 @@ class MLReserving:
             test_data = self.full_data_[to_predict]
             
             # Group by origin year and sum predictions
-            ibnr_mean = test_data.groupby(self.origin_col)[self.value_col].sum()
-            ibnr_lower = self.full_data_lower_[to_predict].groupby(self.origin_col)[self.value_col].sum()
-            ibnr_upper = self.full_data_upper_[to_predict].groupby(self.origin_col)[self.value_col].sum()
+            self.ibnr_mean_ = test_data.groupby(self.origin_col)[self.value_col].sum()
+            self.ibnr_lower_ = self.full_data_lower_[to_predict].groupby(self.origin_col)[self.value_col].sum()
+            self.ibnr_upper_ = self.full_data_upper_[to_predict].groupby(self.origin_col)[self.value_col].sum()
+
+            # Calculate ultimate values by adding IBNR to latest values
+            self.ultimate_ = self.latest_ + self.ibnr_mean_
+            self.ultimate_lower_ = self.latest_ + self.ibnr_lower_
+            self.ultimate_upper_ = self.latest_ + self.ibnr_upper_
 
             DescribeResult = namedtuple("DescribeResult", 
-                                      ("mean", "lower", "upper", "ibnr_mean", "ibnr_lower", "ibnr_upper"))
-            return DescribeResult(mean_triangle, lower_triangle, upper_triangle,
-                                ibnr_mean, ibnr_lower, ibnr_upper)
+                                        ("mean", "lower", "upper"))
+            return DescribeResult(mean_triangle, 
+                                  lower_triangle, 
+                                  upper_triangle)
         else: 
             raise NotImplementedError
+            
+    def get_ibnr(self):
+        """
+        Get the IBNR (Incurred But Not Reported) values for each origin year
+        
+        Returns
+        -------
+        pandas.DataFrame
+            IBNR values (mean, lower, upper) indexed by origin year
+        """
+        if self.ibnr_mean_ is None:
+            raise ValueError("Model must be fitted and predict() must be called before getting IBNR values")
+
+        DescribeResult = namedtuple("DescribeResult", 
+                                      ("mean", "lower", "upper")) 
+           
+        return DescribeResult(self.ibnr_mean_, self.ibnr_lower_, self.ibnr_upper_)
+        
+    def get_latest(self):
+        """
+        Get the latest known values for each origin year
+        
+        Returns
+        -------
+        pandas.Series
+            Latest known values indexed by origin year
+        """
+        if self.latest_ is None:
+            raise ValueError("Model must be fitted before getting latest values")
+        return self.latest_
+        
+    def get_ultimate(self):
+        """
+        Get the ultimate loss estimates for each origin year
+        
+        Returns
+        -------
+        pandas.DataFrame
+            Ultimate loss estimates (mean, lower, upper) indexed by origin year
+        """
+        if self.ultimate_ is None:
+            raise ValueError("Model must be fitted before getting ultimate values")
+    
+        DescribeResult = namedtuple("DescribeResult", 
+                                      ("mean", "lower", "upper"))   
+                     
+        return DescribeResult(self.ultimate_,
+                              self.ultimate_lower_,
+                              self.ultimate_upper_)
