@@ -54,7 +54,7 @@ docs: install ## generate docs
 	#pip install black pdoc 
 	#black mlreserving/* --line-length=80	
 	#find mlreserving/ -name "*.py" -exec autopep8 --max-line-length=80 --in-place {} +
-	pdoc -t docs src/mlreserving/* --output-dir mlreserving-docs
+	pdoc -t docs mlreserving/* --output-dir mlreserving-docs
 	find . -name '__pycache__' -exec rm -fr {} +
 	cp -rf mlreserving-docs/* ../../Pro_Website/Techtonique.github.io/mlreserving
 
@@ -62,7 +62,7 @@ servedocs: install ## compile the docs watching for change
 	#pip install black pdoc 
 	#black mlreserving/* --line-length=80	
 	#find mlreserving/ -name "*.py" -exec autopep8 --max-line-length=80 --in-place {} +
-	pdoc -t docs src/mlreserving/* 
+	pdoc -t docs mlreserving/* 
 	find . -name '__pycache__' -exec rm -fr {} +
 
 release: dist ## package and upload a release
