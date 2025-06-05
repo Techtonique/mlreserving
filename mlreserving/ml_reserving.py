@@ -8,7 +8,7 @@ from collections import namedtuple
 from copy import deepcopy
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import RidgeCV
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from nnetsauce import PredictionInterval
 
 def arcsinh(x):
@@ -36,6 +36,8 @@ class MLReserving:
     type_pi: a string;
         type of prediction interval: currently `None`
         split conformal prediction without simulation, "kde" or "bootstrap"
+    use_factors : bool, default=False
+        Whether to treat origin and development years as categorical variables
     random_state : int, default=42
         Random state for reproducibility
     """
@@ -45,6 +47,7 @@ class MLReserving:
                  level=95,
                  replications=None,
                  type_pi=None,
+                 use_factors=False,
                  random_state=42):
         if model is None:
             model = RidgeCV(alphas=[10**i for i in range(-5, 5)])
@@ -55,6 +58,7 @@ class MLReserving:
         self.level = level 
         self.replications = replications
         self.type_pi = type_pi 
+        self.use_factors = use_factors
         self.origin_col = None
         self.development_col = None
         self.value_col = None
@@ -66,6 +70,8 @@ class MLReserving:
         self.full_data_lower_ = None 
         self.full_data_sims_ = []
         self.scaler = StandardScaler()
+        self.origin_encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
+        self.dev_encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
         
     def fit(self, data, origin_col="origin", 
             development_col="development", 
@@ -105,8 +111,6 @@ class MLReserving:
             [self.origin_years, range(1, self.max_dev + 1)],
             names=[origin_col, "dev"]
         ).to_frame(index=False)
-
-        print("full_grid", full_grid)
         
         full_data = pd.merge(
             full_grid, 
@@ -114,15 +118,35 @@ class MLReserving:
             on=[origin_col, "dev"], 
             how="left"
         )
-
-        print("full_data", full_data)
         
         full_data["calendar"] = full_data[origin_col] + full_data["dev"] - 1
         
         # Apply transformations
-        full_data["log_origin"] = np.log(full_data[origin_col])
-        full_data["log_dev"] = np.log(full_data["dev"])  # +1 to handle dev=0
-        full_data["log_calendar"] = np.log(full_data["calendar"])
+        if self.use_factors:
+            # One-hot encode origin and development years
+            origin_encoded = self.origin_encoder.fit_transform(full_data[[origin_col]])
+            dev_encoded = self.dev_encoder.fit_transform(full_data[["dev"]])
+            
+            # Create feature names for the encoded columns
+            origin_feature_names = [f"origin_{year}" for year in self.origin_years]
+            dev_feature_names = [f"dev_{i}" for i in range(1, self.max_dev + 1)]
+            
+            # Add encoded features to the dataframe
+            full_data = pd.concat([
+                full_data,
+                pd.DataFrame(origin_encoded, columns=origin_feature_names, index=full_data.index),
+                pd.DataFrame(dev_encoded, columns=dev_feature_names, index=full_data.index)
+            ], axis=1)
+            
+            # Add calendar year as a feature
+            full_data["log_calendar"] = np.log(full_data["calendar"])
+            feature_cols = origin_feature_names + dev_feature_names + ["log_calendar"]
+        else:
+            # Use log transformations
+            full_data["log_origin"] = np.log(full_data[origin_col])
+            full_data["log_dev"] = np.log(full_data["dev"])
+            full_data["log_calendar"] = np.log(full_data["calendar"])
+            feature_cols = ["log_origin", "log_dev", "log_calendar"]
         
         # Transform response if not NaN
         full_data[f"arcsinh_{value_col}"] = full_data[value_col].apply(
@@ -131,9 +155,6 @@ class MLReserving:
         
         full_data["to_predict"] = full_data[value_col].isna()
 
-        print("Full data shape:", full_data.shape)
-        print("Number of predictions needed:", full_data["to_predict"].sum())
-
         self.full_data_ = deepcopy(full_data)
         self.full_data_lower_ = deepcopy(full_data)
         self.full_data_upper_ = deepcopy(full_data)
@@ -141,11 +162,7 @@ class MLReserving:
         train_data = full_data[~full_data["to_predict"]]
         test_data = full_data[full_data["to_predict"]]
         
-        print("Train data shape:", train_data.shape)
-        print("Test data shape:", test_data.shape)
-        
         # Prepare features for training
-        feature_cols = ["log_origin", "log_dev", "log_calendar"]
         X_train = train_data[feature_cols].values
         X_test = test_data[feature_cols].values
         
@@ -183,9 +200,6 @@ class MLReserving:
             lower_pred = inv_arcsinh(preds.lower)
             upper_pred = inv_arcsinh(preds.upper)
             
-            print("Mean predictions shape:", mean_pred.shape)
-            print("First few mean predictions:", mean_pred[:5])
-            
             # Ensure predictions are non-negative
             mean_pred = np.maximum(mean_pred, 0)
             lower_pred = np.maximum(lower_pred, 0)
@@ -207,20 +221,13 @@ class MLReserving:
                                                        columns="dev", 
                                                        values=self.value_col).sort_index()
 
-            print("\nMean triangle shape:", mean_triangle.shape)
-            print("Mean triangle:\n", mean_triangle)
-
             # Calculate IBNR based on predicted values
             test_data = self.full_data_[to_predict]
-            print("\nTest data shape:", test_data.shape)
-            print("Test data:\n", test_data[[self.origin_col, "dev", self.value_col]].head())
             
             # Group by origin year and sum predictions
             ibnr_mean = test_data.groupby(self.origin_col)[self.value_col].sum()
             ibnr_lower = self.full_data_lower_[to_predict].groupby(self.origin_col)[self.value_col].sum()
             ibnr_upper = self.full_data_upper_[to_predict].groupby(self.origin_col)[self.value_col].sum()
-
-            print("\nIBNR mean:\n", ibnr_mean)
 
             DescribeResult = namedtuple("DescribeResult", 
                                       ("mean", "lower", "upper", "ibnr_mean", "ibnr_lower", "ibnr_upper"))
