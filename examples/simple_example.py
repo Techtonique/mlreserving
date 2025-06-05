@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from mlreserving import MLReserving
 
 # Load the dataset
-url = "https://raw.githubusercontent.com/Techtonique/datasets/refs/heads/main/tabular/triangle/raa.csv"
+url = "https://raw.githubusercontent.com/Techtonique/datasets/refs/heads/main/tabular/triangle/abc.csv"
 df = pd.read_csv(url)
 
 print(df.head())

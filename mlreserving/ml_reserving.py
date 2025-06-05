@@ -7,7 +7,16 @@ import numpy as np
 from collections import namedtuple
 from copy import deepcopy
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import RidgeCV
 from nnetsauce import PredictionInterval
+
+def arcsinh(x):
+    """Arcsinh transformation"""
+    return np.arcsinh(x)
+
+def inv_arcsinh(x):
+    """Inverse arcsinh transformation"""
+    return np.sinh(x)
 
 class MLReserving:
     """
@@ -16,7 +25,7 @@ class MLReserving:
     Parameters
     ----------
     model : object, optional
-        model to use (must implement fit and predict methods), default is RandomForestRegressor
+        model to use (must implement fit and predict methods), default is RidgeCV
     level: a float;
         Confidence level for prediction intervals. Default is 95,
         equivalent to a miscoverage error of 5 (%)
@@ -37,7 +46,7 @@ class MLReserving:
                  type_pi=None,
                  random_state=42):
         if model is None:
-            model = RandomForestRegressor(random_state=random_state)
+            model = RidgeCV(alphas=[10**i for i in range(-5, 5)])
         self.model = PredictionInterval(model, level=level, 
                                         type_pi=type_pi, 
                                         type_split="sequential",
@@ -86,15 +95,15 @@ class MLReserving:
         df = data.copy()
                 
         df["dev"] = df[development_col] - df[origin_col]
-
+        
         self.max_dev = df["dev"].max()
         self.origin_years = df[origin_col].unique()
-
+        
         full_grid = pd.MultiIndex.from_product(
             [self.origin_years, range(self.max_dev)],
             names=[origin_col, "dev"]
         ).to_frame(index=False)
-
+        
         full_data = pd.merge(
             full_grid, 
             df[[origin_col, "dev", value_col]], 
@@ -104,7 +113,19 @@ class MLReserving:
         
         full_data["calendar"] = full_data[origin_col] + full_data["dev"]
         
+        # Apply transformations
+        full_data["log_origin"] = np.log(full_data[origin_col])
+        full_data["log_dev"] = np.log(full_data["dev"] + 1)  # +1 to handle dev=0
+        full_data["log_calendar"] = np.log(full_data["calendar"])
+        
+        # Transform response if not NaN
+        full_data[f"arcsinh_{value_col}"] = full_data[value_col].apply(
+            lambda x: arcsinh(x) if pd.notnull(x) else x
+        )
+        
         full_data["to_predict"] = full_data[value_col].isna()
+
+        print("full_data", full_data)
 
         self.full_data_ = deepcopy(full_data)
         self.full_data_lower_ = deepcopy(full_data)
@@ -113,9 +134,10 @@ class MLReserving:
         train_data = full_data[~full_data["to_predict"]]
         test_data = full_data[full_data["to_predict"]]
         
-        X_train = train_data[[origin_col, "dev", "calendar"]].values
-        y_train = train_data[value_col].values
-        self.X_test_ = test_data[[origin_col, "dev", "calendar"]].values
+        # Use transformed features for training
+        X_train = train_data[["log_origin", "log_dev", "log_calendar"]].values
+        y_train = train_data[f"arcsinh_{value_col}"].values
+        self.X_test_ = test_data[["log_origin", "log_dev", "log_calendar"]].values
 
         self.model.fit(X_train, y_train)
         
@@ -135,15 +157,15 @@ class MLReserving:
         pandas.DataFrame
             Complete reserving triangle with predictions
         """
-        preds = self.model.predict(self.X_test_, return_pi=True) 
-
+        preds = self.model.predict(self.X_test_, return_pi=True)            
+        
         to_predict = self.full_data_["to_predict"]        
 
         if self.type_pi is None: 
-
-            self.full_data_.loc[to_predict, self.value_col] = preds.mean
-            self.full_data_lower_.loc[to_predict, self.value_col] = preds.lower
-            self.full_data_upper_.loc[to_predict, self.value_col] = preds.upper
+            # Transform predictions back to original scale
+            self.full_data_.loc[to_predict, self.value_col] = inv_arcsinh(preds.mean)
+            self.full_data_lower_.loc[to_predict, self.value_col] = inv_arcsinh(preds.lower)
+            self.full_data_upper_.loc[to_predict, self.value_col] = inv_arcsinh(preds.upper)
 
             DescribeResult = namedtuple("DescribeResult", ("mean", "lower", "upper"))
             return DescribeResult(self.full_data_.pivot(index=self.origin_col, 
@@ -156,5 +178,4 @@ class MLReserving:
                                                         columns="dev", 
                                                         values=self.value_col).sort_index().T)
         else: 
-
             raise NotImplementedError
