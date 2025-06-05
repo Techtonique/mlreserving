@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt 
 from mlreserving import MLReserving
-from sklearn.ensemble import ExtraTreesRegressor
+from sklearn.ensemble import ExtraTreesRegressor, RandomForestRegressor
 from sklearn.linear_model import RidgeCV
 
 # Load the dataset
@@ -17,7 +17,7 @@ print(df.head())
 print(df.tail())
 #df["values"] = df["values"]/1000
 
-models = [RidgeCV(), ExtraTreesRegressor()]
+models = [RidgeCV(), ExtraTreesRegressor(), RandomForestRegressor()]
 
 # Try both factor and non-factor approaches
 for use_factors in [False, True]:
@@ -28,7 +28,7 @@ for use_factors in [False, True]:
     for mdl in models: 
         # Initialize the model with prediction intervals
         model = MLReserving(model=mdl,
-            level=95,  # 95% confidence level
+            level=80,  # 80% confidence level
             use_factors=use_factors,  # Use categorical encoding
             random_state=42
         )        

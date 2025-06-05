@@ -201,9 +201,9 @@ class MLReserving:
             upper_pred = inv_arcsinh(preds.upper)
             
             # Ensure predictions are non-negative
-            mean_pred = np.maximum(mean_pred, 0)
-            lower_pred = np.maximum(lower_pred, 0)
-            upper_pred = np.maximum(upper_pred, 0)
+            #mean_pred = np.maximum(mean_pred, 0)
+            #lower_pred = np.maximum(lower_pred, 0)
+            #upper_pred = np.maximum(upper_pred, 0)
             
             # Store predictions in the full data
             self.full_data_.loc[to_predict, self.value_col] = mean_pred
