@@ -10,12 +10,12 @@ from sklearn.ensemble import ExtraTreesRegressor
 from sklearn.linear_model import RidgeCV
 
 # Load the dataset
-url = "https://raw.githubusercontent.com/Techtonique/datasets/refs/heads/main/tabular/triangle/genins.csv"
+url = "https://raw.githubusercontent.com/Techtonique/datasets/refs/heads/main/tabular/triangle/raa.csv"
 df = pd.read_csv(url)
 
 print(df.head())
 print(df.tail())
-df["values"] = df["values"]/1000
+#df["values"] = df["values"]/1000
 
 models = [RidgeCV(), ExtraTreesRegressor()]
 
