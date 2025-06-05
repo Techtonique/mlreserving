@@ -178,19 +178,31 @@ class MLReserving:
             lower_pred = np.maximum(lower_pred, 0)
             upper_pred = np.maximum(upper_pred, 0)
             
+            # Store predictions in the full data
             self.full_data_.loc[to_predict, self.value_col] = mean_pred
             self.full_data_lower_.loc[to_predict, self.value_col] = lower_pred
             self.full_data_upper_.loc[to_predict, self.value_col] = upper_pred
 
-            DescribeResult = namedtuple("DescribeResult", ("mean", "lower", "upper"))
-            return DescribeResult(self.full_data_.pivot(index=self.origin_col, 
-                                                        columns="dev", 
-                                                        values=self.value_col).sort_index().T, 
-                                  self.full_data_lower_.pivot(index=self.origin_col, 
-                                                        columns="dev", 
-                                                        values=self.value_col).sort_index().T, 
-                                  self.full_data_upper_.pivot(index=self.origin_col, 
-                                                        columns="dev", 
-                                                        values=self.value_col).sort_index().T)
+            # Calculate triangles
+            mean_triangle = self.full_data_.pivot(index=self.origin_col, 
+                                                columns="dev", 
+                                                values=self.value_col).sort_index().T
+            lower_triangle = self.full_data_lower_.pivot(index=self.origin_col, 
+                                                       columns="dev", 
+                                                       values=self.value_col).sort_index().T
+            upper_triangle = self.full_data_upper_.pivot(index=self.origin_col, 
+                                                       columns="dev", 
+                                                       values=self.value_col).sort_index().T
+
+            # Calculate IBNR based on predicted values
+            test_data = self.full_data_[to_predict]
+            ibnr_mean = test_data.groupby(self.origin_col)[self.value_col].sum()
+            ibnr_lower = self.full_data_lower_[to_predict].groupby(self.origin_col)[self.value_col].sum()
+            ibnr_upper = self.full_data_upper_[to_predict].groupby(self.origin_col)[self.value_col].sum()
+
+            DescribeResult = namedtuple("DescribeResult", 
+                                      ("mean", "lower", "upper", "ibnr_mean", "ibnr_lower", "ibnr_upper"))
+            return DescribeResult(mean_triangle, lower_triangle, upper_triangle,
+                                ibnr_mean, ibnr_lower, ibnr_upper)
         else: 
             raise NotImplementedError
