@@ -117,16 +117,12 @@ class MLReserving:
         df = data.copy()
         df["dev"] = df[development_col] - df[origin_col] + 1
         df["calendar"] = df[origin_col] + df["dev"] - 1
-        df.sort_values("calendar", inplace=True)
+        df = df.sort_values([origin_col, "dev"])
 
         # If data is cumulated, convert to incremental first
         if self.cumulated:
-            # Sort by origin and development to ensure proper differencing
-            df = df.sort_values([origin_col, "dev"])
             # Calculate incremental values
-            df[value_col] = df.groupby(origin_col)[value_col].diff()
-            # First value in each group is the same as cumulative
-            df.loc[df.groupby(origin_col)[value_col].head(1).index, value_col] = df.loc[df.groupby(origin_col)[value_col].head(1).index, value_col]
+            df[value_col] = df.groupby(origin_col)[value_col].diff().fillna(method='bfill')
 
         self.max_dev = df["dev"].max()
         self.origin_years = df[origin_col].unique()
@@ -202,11 +198,6 @@ class MLReserving:
         
         y_train = train_data[f"arcsinh_{value_col}"].values
 
-        print("self.model", self.model)
-        print("\n X_train", X_train)
-        print("\n X_train_scaled", X_train_scaled)
-        print("\n y_train", y_train)
-
         self.model.fit(X_train_scaled, y_train)
         
         return self
@@ -246,8 +237,6 @@ class MLReserving:
             # If data was originally cumulated, convert predictions back to cumulative
             if self.cumulated:
                 for df in [self.full_data_, self.full_data_lower_, self.full_data_upper_]:
-                    # Sort by origin and development to ensure proper cumulation
-                    df.sort_values([self.origin_col, "dev"], inplace=True)
                     # Calculate cumulative values
                     df[self.value_col] = df.groupby(self.origin_col)[self.value_col].cumsum()
 
