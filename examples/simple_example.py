@@ -38,21 +38,22 @@ for use_factors in [False, True]:
 
         # Make predictions with intervals
         result = model.predict()
+        ibnr = model.get_ibnr()
 
         print("\nMean predictions:")
         print(result.mean)
         print("\nIBNR per origin year (mean):")
-        print(result.ibnr_mean)
+        print(ibnr.mean)
 
         print("\nLower bound (95%):")
         print(result.lower)
         print("\nIBNR per origin year (lower):")
-        print(result.ibnr_lower)
+        print(ibnr.lower)
 
         print("\nUpper bound (95%):")
         print(result.upper)
         print("\nIBNR per origin year (upper):")
-        print(result.ibnr_upper)
+        print(ibnr.upper)
 
         # Display results
         print("\nMean predictions:")
@@ -72,12 +73,12 @@ for use_factors in [False, True]:
 
         # Plot IBNR
         plt.figure(figsize=(10, 6))
-        plt.plot(result.ibnr_mean.index, result.ibnr_mean.values, 'b-', label='Mean IBNR')
-        plt.fill_between(result.ibnr_mean.index, 
-                        result.ibnr_lower.values, 
-                        result.ibnr_upper.values, 
-                        alpha=0.2, 
-                        label='95% Confidence Interval')
+        plt.plot(ibnr.mean.index, ibnr.mean.values, 'b-', label='Mean IBNR')
+        plt.fill_between(ibnr.mean.index, 
+                         ibnr.lower.values, 
+                         ibnr.upper.values, 
+                         alpha=0.2, 
+                         label='95% Confidence Interval')
         plt.title(f'IBNR per Origin Year - {mdl.__class__.__name__} ({use_factors and "Factors" or "Log"})')
         plt.xlabel('Origin Year')
         plt.ylabel('IBNR')

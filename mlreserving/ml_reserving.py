@@ -265,7 +265,7 @@ class MLReserving:
             raise ValueError("Model must be fitted and predict() must be called before getting IBNR values")
 
         DescribeResult = namedtuple("DescribeResult", 
-                                      ("mean", "lower", "upper")) 
+                                    ("mean", "lower", "upper")) 
            
         return DescribeResult(self.ibnr_mean_, self.ibnr_lower_, self.ibnr_upper_)
         
