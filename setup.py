@@ -6,7 +6,7 @@ setup(
     version=__version__,
     packages=find_packages(),
     install_requires=[
-        "nnetsauce",
+        "nnetsauce"
     ],
     extras_require={
         "dev": [
