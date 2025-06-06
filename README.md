@@ -15,14 +15,14 @@ from mlreserving import MLReserving
 import pandas as pd
 
 # Create your triangle data
-data = pd.DataFrame({
-    'origin': [...],  # Origin years
-    'development': [...],  # Development years
-    'values': [...]  # Claim values
-})
+# Load the dataset
+url = "https://raw.githubusercontent.com/Techtonique/datasets/refs/heads/main/tabular/triangle/raa.csv"
+data = pd.read_csv(url)
 
 # Initialize and fit the model
-model = MLReserving()
+model = MLReserving(model=mdl,
+                    level=80,  # 80% confidence level
+                    random_state=42)
 model.fit(data)
 
 # Make predictions
