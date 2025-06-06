@@ -35,6 +35,8 @@ class MLReserving:
     replications: an integer;
         Number of replications for simulated conformal (default is `None`),
         for type_pi = "bootstrap" or "kde"
+    conformal_method: a string
+        conformal prediction method "splitconformal" or "localconformal"
     type_pi: a string;
         type of prediction interval: currently `None`
         split conformal prediction without simulation, "kde" or "bootstrap"
@@ -48,14 +50,19 @@ class MLReserving:
                  model=None, 
                  level=95,
                  replications=None,
+                 conformal_method="splitconformal",
                  type_pi=None,
                  use_factors=False,
                  random_state=42):
         if model is None:
             model = RidgeCV(alphas=[10**i for i in range(-5, 5)])
+        assert conformal_method in ("splitconformal", "localconformal"),\
+              "must have conformal_method in ('splitconformal', 'localconformal')"    
+        self.conformal_method = conformal_method
         self.model = PredictionInterval(model, level=level, 
                                         type_pi=type_pi, 
                                         type_split="sequential",
+                                        method=conformal_method,
                                         replications=replications)
         self.level = level 
         self.replications = replications
@@ -325,3 +332,50 @@ class MLReserving:
         return DescribeResult(self.ultimate_,
                               self.ultimate_lower_,
                               self.ultimate_upper_)
+
+    def get_summary(self):
+        """
+        Get a summary of reserving results including latest values, ultimate estimates,
+        and IBNR values with confidence intervals.
+        
+        Returns
+        -------
+        dict
+            Dictionary containing two keys:
+            - 'ByOrigin': DataFrame with results by origin year
+            - 'Totals': Series with total values
+        """
+        if self.ultimate_ is None:
+            raise ValueError("Model must be fitted before getting summary")
+
+        # Get latest values
+        latest = self.get_latest()
+        
+        # Get ultimate values
+        ultimate = self.get_ultimate()
+        
+        # Get IBNR values
+        ibnr = self.get_ibnr()
+        
+        # Create summary by origin
+        summary_by_origin = pd.DataFrame({
+            'Latest': latest,
+            'Mean Ultimate': ultimate.mean,
+            'Mean IBNR': ibnr.mean,
+            f'IBNR {self.level}%': ibnr.upper,
+            f'Ultimate Lo{self.level}': ultimate.lower,
+            f'Ultimate Hi{self.level}': ultimate.upper
+        })
+        
+        # Calculate totals
+        totals = pd.Series({
+            'Latest': latest.sum(),
+            'Mean Ultimate': ultimate.mean.sum(),
+            'Mean IBNR': ibnr.mean.sum(),
+            f'Total IBNR {self.level}%': ibnr.upper.sum()
+        })
+        
+        return {
+            'ByOrigin': summary_by_origin,
+            'Totals': totals
+        }

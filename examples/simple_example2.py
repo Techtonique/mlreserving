@@ -10,12 +10,12 @@ from sklearn.ensemble import ExtraTreesRegressor, RandomForestRegressor
 from sklearn.linear_model import RidgeCV
 
 # Load the dataset
-url = "https://raw.githubusercontent.com/Techtonique/datasets/refs/heads/main/tabular/triangle/raa.csv"
+url = "https://raw.githubusercontent.com/Techtonique/datasets/refs/heads/main/tabular/triangle/genins.csv"
 df = pd.read_csv(url)
 
 print(df.head())
 print(df.tail())
-
+df["values"] = df["values"]/1000
 
 models = [RidgeCV(), ExtraTreesRegressor(), RandomForestRegressor()]
 
@@ -54,9 +54,6 @@ for use_factors in [False, True]:
         print(result.upper)
         print("\nIBNR per origin year (upper):")
         print(ibnr.upper)
-
-        print("\n Summary:")
-        print(model.get_summary())
 
         # Display results
         print("\nMean predictions:")
