@@ -1,12 +1,11 @@
 from setuptools import setup, find_packages
-from mlreserving import __version__
 
 setup(
     name="mlreserving",
-    version=__version__,
+    version="0.2.0",
     packages=find_packages(),
     install_requires=[
-        "nnetsauce"
+        "nnetsauce",
     ],
     extras_require={
         "dev": [

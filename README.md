@@ -43,4 +43,4 @@ ultimate = model.get_ultimate()
 
 ## License
 
-MIT License
+BSD Clause Clear License

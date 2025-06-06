@@ -114,8 +114,6 @@ class MLReserving:
         df["calendar"] = df[origin_col] + df["dev"] - 1
         df.sort_values("calendar", inplace=True)
 
-        print("\n df", df)
-        
         self.max_dev = df["dev"].max()
         self.origin_years = df[origin_col].unique()
         
@@ -189,6 +187,11 @@ class MLReserving:
         self.X_test_ = self.scaler.transform(X_test)
         
         y_train = train_data[f"arcsinh_{value_col}"].values
+
+        print("self.model", self.model)
+        print("\n X_train", X_train)
+        print("\n X_train_scaled", X_train_scaled)
+        print("\n y_train", y_train)
 
         self.model.fit(X_train_scaled, y_train)
         
