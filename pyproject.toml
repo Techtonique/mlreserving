@@ -1,6 +1,6 @@
 [project]
 name = "mlreserving"
-version = "0.2.1"
+version = "0.3.0"
 description = "Model-agnostic Probabilistic Machine Learning Reserving"
 requires-python = ">=3.7"
 authors = [
