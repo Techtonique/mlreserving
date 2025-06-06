@@ -215,70 +215,67 @@ class MLReserving:
         
         to_predict = self.full_data_["to_predict"]        
 
-        if self.type_pi is None: 
-            # Transform predictions back to original scale
-            mean_pred = inv_arcsinh(preds.mean)
-            lower_pred = inv_arcsinh(preds.lower)
-            upper_pred = inv_arcsinh(preds.upper)
-            
-            # Store predictions in the full data
-            self.full_data_.loc[to_predict, self.value_col] = mean_pred
-            self.full_data_lower_.loc[to_predict, self.value_col] = lower_pred
-            self.full_data_upper_.loc[to_predict, self.value_col] = upper_pred
+        # Transform predictions back to original scale
+        mean_pred = inv_arcsinh(preds.mean)
+        lower_pred = inv_arcsinh(preds.lower)
+        upper_pred = inv_arcsinh(preds.upper)
+        
+        # Store predictions in the full data
+        self.full_data_.loc[to_predict, self.value_col] = mean_pred
+        self.full_data_lower_.loc[to_predict, self.value_col] = lower_pred
+        self.full_data_upper_.loc[to_predict, self.value_col] = upper_pred
 
-            # Calculate IBNR based on predicted values (in incremental form)
-            test_data = self.full_data_[to_predict]
-            
-            # Group by origin year and sum predictions
-            self.ibnr_mean_ = test_data.groupby(self.origin_col)[self.value_col].sum()
-            self.ibnr_lower_ = self.full_data_lower_[to_predict].groupby(self.origin_col)[self.value_col].sum()
-            self.ibnr_upper_ = self.full_data_upper_[to_predict].groupby(self.origin_col)[self.value_col].sum()
+        # Calculate IBNR based on predicted values (in incremental form)
+        test_data = self.full_data_[to_predict]
+        
+        # Group by origin year and sum predictions
+        self.ibnr_mean_ = test_data.groupby(self.origin_col)[self.value_col].sum()
+        self.ibnr_lower_ = self.full_data_lower_[to_predict].groupby(self.origin_col)[self.value_col].sum()
+        self.ibnr_upper_ = self.full_data_upper_[to_predict].groupby(self.origin_col)[self.value_col].sum()
 
-            # If data was originally cumulated, convert predictions back to cumulative
-            if self.cumulated:
-                for df in [self.full_data_, self.full_data_lower_, self.full_data_upper_]:
-                    # Calculate cumulative values
-                    df[self.value_col] = df.groupby(self.origin_col)[self.value_col].cumsum()
+        # If data was originally cumulated, convert predictions back to cumulative
+        if self.cumulated:
+            for df in [self.full_data_, self.full_data_lower_, self.full_data_upper_]:
+                # Calculate cumulative values
+                df[self.value_col] = df.groupby(self.origin_col)[self.value_col].cumsum()
 
-            # Calculate triangles using utility function
-            mean_triangle = df_to_triangle(
-                self.full_data_,
-                origin_col=self.origin_col,
-                development_col="dev",
-                value_col=self.value_col
-            )
-            lower_triangle = df_to_triangle(
-                self.full_data_lower_,
-                origin_col=self.origin_col,
-                development_col="dev",
-                value_col=self.value_col
-            )
-            upper_triangle = df_to_triangle(
-                self.full_data_upper_,
-                origin_col=self.origin_col,
-                development_col="dev",
-                value_col=self.value_col
-            )
+        # Calculate triangles using utility function
+        mean_triangle = df_to_triangle(
+            self.full_data_,
+            origin_col=self.origin_col,
+            development_col="dev",
+            value_col=self.value_col
+        )
+        lower_triangle = df_to_triangle(
+            self.full_data_lower_,
+            origin_col=self.origin_col,
+            development_col="dev",
+            value_col=self.value_col
+        )
+        upper_triangle = df_to_triangle(
+            self.full_data_upper_,
+            origin_col=self.origin_col,
+            development_col="dev",
+            value_col=self.value_col
+        )
 
-            # Calculate ultimate values
-            if self.cumulated:
-                # For cumulative data, ultimate is the last value in each origin year
-                self.ultimate_ = self.full_data_.groupby(self.origin_col)[self.value_col].last()
-                self.ultimate_lower_ = self.full_data_lower_.groupby(self.origin_col)[self.value_col].last()
-                self.ultimate_upper_ = self.full_data_upper_.groupby(self.origin_col)[self.value_col].last()
-            else:
-                # For incremental data, ultimate is latest + IBNR
-                self.ultimate_ = self.latest_ + self.ibnr_mean_
-                self.ultimate_lower_ = self.latest_ + self.ibnr_lower_
-                self.ultimate_upper_ = self.latest_ + self.ibnr_upper_
+        # Calculate ultimate values
+        if self.cumulated:
+            # For cumulative data, ultimate is the last value in each origin year
+            self.ultimate_ = self.full_data_.groupby(self.origin_col)[self.value_col].last()
+            self.ultimate_lower_ = self.full_data_lower_.groupby(self.origin_col)[self.value_col].last()
+            self.ultimate_upper_ = self.full_data_upper_.groupby(self.origin_col)[self.value_col].last()
+        else:
+            # For incremental data, ultimate is latest + IBNR
+            self.ultimate_ = self.latest_ + self.ibnr_mean_
+            self.ultimate_lower_ = self.latest_ + self.ibnr_lower_
+            self.ultimate_upper_ = self.latest_ + self.ibnr_upper_
 
-            DescribeResult = namedtuple("DescribeResult", 
-                                        ("mean", "lower", "upper"))
-            return DescribeResult(mean_triangle.T, 
-                                  lower_triangle.T, 
-                                  upper_triangle.T)
-        else: 
-            raise NotImplementedError
+        DescribeResult = namedtuple("DescribeResult", 
+                                    ("mean", "lower", "upper"))
+        return DescribeResult(mean_triangle.T, 
+                                lower_triangle.T, 
+                                upper_triangle.T)
             
     def get_ibnr(self):
         """

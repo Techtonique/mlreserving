@@ -15,7 +15,7 @@ df = pd.read_csv(url)
 
 print(df.head())
 print(df.tail())
-#df["values"] = df["values"]/1000
+
 
 models = [RidgeCV(), ExtraTreesRegressor(), RandomForestRegressor()]
 
