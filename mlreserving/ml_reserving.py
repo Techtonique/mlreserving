@@ -66,6 +66,7 @@ class MLReserving:
         self.value_col = None
         self.max_dev = None
         self.origin_years = None
+        self.cumulated = None 
         self.latest_ = None
         self.ultimate_ = None
         self.ultimate_lower_ = None
@@ -84,7 +85,8 @@ class MLReserving:
         
     def fit(self, data, origin_col="origin", 
             development_col="development", 
-            value_col="values"):
+            value_col="values", 
+            cumulated=True):
         """
         Fit the model to the triangle data
         
@@ -98,6 +100,8 @@ class MLReserving:
             Name of the development year column
         value_col : str, default="values"
             Name of the value column
+        cumulated: bool, default=True
+            If the triangle is cumulated
             
         Returns
         -------
@@ -108,11 +112,21 @@ class MLReserving:
         self.origin_col = origin_col
         self.development_col = development_col
         self.value_col = value_col
+        self.cumulated = cumulated
         
         df = data.copy()
         df["dev"] = df[development_col] - df[origin_col] + 1
         df["calendar"] = df[origin_col] + df["dev"] - 1
         df.sort_values("calendar", inplace=True)
+
+        # If data is cumulated, convert to incremental first
+        if self.cumulated:
+            # Sort by origin and development to ensure proper differencing
+            df = df.sort_values([origin_col, "dev"])
+            # Calculate incremental values
+            df[value_col] = df.groupby(origin_col)[value_col].diff()
+            # First value in each group is the same as cumulative
+            df.loc[df.groupby(origin_col)[value_col].head(1).index, value_col] = df.loc[df.groupby(origin_col)[value_col].head(1).index, value_col]
 
         self.max_dev = df["dev"].max()
         self.origin_years = df[origin_col].unique()
@@ -221,6 +235,22 @@ class MLReserving:
             self.full_data_lower_.loc[to_predict, self.value_col] = lower_pred
             self.full_data_upper_.loc[to_predict, self.value_col] = upper_pred
 
+            # Calculate IBNR based on predicted values (in incremental form)
+            test_data = self.full_data_[to_predict]
+            
+            # Group by origin year and sum predictions
+            self.ibnr_mean_ = test_data.groupby(self.origin_col)[self.value_col].sum()
+            self.ibnr_lower_ = self.full_data_lower_[to_predict].groupby(self.origin_col)[self.value_col].sum()
+            self.ibnr_upper_ = self.full_data_upper_[to_predict].groupby(self.origin_col)[self.value_col].sum()
+
+            # If data was originally cumulated, convert predictions back to cumulative
+            if self.cumulated:
+                for df in [self.full_data_, self.full_data_lower_, self.full_data_upper_]:
+                    # Sort by origin and development to ensure proper cumulation
+                    df.sort_values([self.origin_col, "dev"], inplace=True)
+                    # Calculate cumulative values
+                    df[self.value_col] = df.groupby(self.origin_col)[self.value_col].cumsum()
+
             # Calculate triangles using utility function
             mean_triangle = df_to_triangle(
                 self.full_data_,
@@ -241,24 +271,23 @@ class MLReserving:
                 value_col=self.value_col
             )
 
-            # Calculate IBNR based on predicted values
-            test_data = self.full_data_[to_predict]
-            
-            # Group by origin year and sum predictions
-            self.ibnr_mean_ = test_data.groupby(self.origin_col)[self.value_col].sum()
-            self.ibnr_lower_ = self.full_data_lower_[to_predict].groupby(self.origin_col)[self.value_col].sum()
-            self.ibnr_upper_ = self.full_data_upper_[to_predict].groupby(self.origin_col)[self.value_col].sum()
-
-            # Calculate ultimate values by adding IBNR to latest values
-            self.ultimate_ = self.latest_ + self.ibnr_mean_
-            self.ultimate_lower_ = self.latest_ + self.ibnr_lower_
-            self.ultimate_upper_ = self.latest_ + self.ibnr_upper_
+            # Calculate ultimate values
+            if self.cumulated:
+                # For cumulative data, ultimate is the last value in each origin year
+                self.ultimate_ = self.full_data_.groupby(self.origin_col)[self.value_col].last()
+                self.ultimate_lower_ = self.full_data_lower_.groupby(self.origin_col)[self.value_col].last()
+                self.ultimate_upper_ = self.full_data_upper_.groupby(self.origin_col)[self.value_col].last()
+            else:
+                # For incremental data, ultimate is latest + IBNR
+                self.ultimate_ = self.latest_ + self.ibnr_mean_
+                self.ultimate_lower_ = self.latest_ + self.ibnr_lower_
+                self.ultimate_upper_ = self.latest_ + self.ibnr_upper_
 
             DescribeResult = namedtuple("DescribeResult", 
                                         ("mean", "lower", "upper"))
-            return DescribeResult(mean_triangle, 
-                                  lower_triangle, 
-                                  upper_triangle)
+            return DescribeResult(mean_triangle.T, 
+                                  lower_triangle.T, 
+                                  upper_triangle.T)
         else: 
             raise NotImplementedError
             
