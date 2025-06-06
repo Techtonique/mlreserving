@@ -10,6 +10,8 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import RidgeCV
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from nnetsauce import PredictionInterval
+from .utils import df_to_triangle, triangle_to_df
+
 
 def arcsinh(x):
     """Arcsinh transformation with offset for zero values"""
@@ -108,17 +110,22 @@ class MLReserving:
         self.value_col = value_col
         
         df = data.copy()
-                
         df["dev"] = df[development_col] - df[origin_col] + 1
+        df["calendar"] = df[origin_col] + df["dev"] - 1
+        df.sort_values("calendar", inplace=True)
+
+        print("\n df", df)
         
         self.max_dev = df["dev"].max()
         self.origin_years = df[origin_col].unique()
         
+        # Create full grid of all possible combinations
         full_grid = pd.MultiIndex.from_product(
             [self.origin_years, range(1, self.max_dev + 1)],
             names=[origin_col, "dev"]
         ).to_frame(index=False)
         
+        # Merge with original data
         full_data = pd.merge(
             full_grid, 
             df[[origin_col, "dev", value_col]], 
@@ -126,6 +133,7 @@ class MLReserving:
             how="left"
         )
         
+        # Calculate calendar year
         full_data["calendar"] = full_data[origin_col] + full_data["dev"] - 1
         
         # Calculate latest values for each origin year
@@ -190,15 +198,10 @@ class MLReserving:
         """
         Make predictions for the missing values in the triangle
         
-        Parameters
-        ----------
-        level : int
-            level of confidence
-            
         Returns
         -------
-        pandas.DataFrame
-            Complete reserving triangle with predictions
+        DescribeResult
+            Named tuple containing mean, lower, and upper triangles
         """
         preds = self.model.predict(self.X_test_, return_pi=True)            
         
@@ -210,26 +213,30 @@ class MLReserving:
             lower_pred = inv_arcsinh(preds.lower)
             upper_pred = inv_arcsinh(preds.upper)
             
-            # Ensure predictions are non-negative
-            #mean_pred = np.maximum(mean_pred, 0)
-            #lower_pred = np.maximum(lower_pred, 0)
-            #upper_pred = np.maximum(upper_pred, 0)
-            
             # Store predictions in the full data
             self.full_data_.loc[to_predict, self.value_col] = mean_pred
             self.full_data_lower_.loc[to_predict, self.value_col] = lower_pred
             self.full_data_upper_.loc[to_predict, self.value_col] = upper_pred
 
-            # Calculate triangles
-            mean_triangle = self.full_data_.pivot(index=self.origin_col, 
-                                                columns="dev", 
-                                                values=self.value_col).sort_index()
-            lower_triangle = self.full_data_lower_.pivot(index=self.origin_col, 
-                                                       columns="dev", 
-                                                       values=self.value_col).sort_index()
-            upper_triangle = self.full_data_upper_.pivot(index=self.origin_col, 
-                                                       columns="dev", 
-                                                       values=self.value_col).sort_index()
+            # Calculate triangles using utility function
+            mean_triangle = df_to_triangle(
+                self.full_data_,
+                origin_col=self.origin_col,
+                development_col="dev",
+                value_col=self.value_col
+            )
+            lower_triangle = df_to_triangle(
+                self.full_data_lower_,
+                origin_col=self.origin_col,
+                development_col="dev",
+                value_col=self.value_col
+            )
+            upper_triangle = df_to_triangle(
+                self.full_data_upper_,
+                origin_col=self.origin_col,
+                development_col="dev",
+                value_col=self.value_col
+            )
 
             # Calculate IBNR based on predicted values
             test_data = self.full_data_[to_predict]
