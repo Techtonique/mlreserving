@@ -27,21 +27,28 @@ class MLReserving:
     
     Parameters
     ----------
+
     model : object, optional
         model to use (must implement fit and predict methods), default is RidgeCV
+
     level: a float;
         Confidence level for prediction intervals. Default is 95,
         equivalent to a miscoverage error of 5 (%)
+
     replications: an integer;
         Number of replications for simulated conformal (default is `None`),
         for type_pi = "bootstrap" or "kde"
+
     conformal_method: a string
         conformal prediction method "splitconformal" or "localconformal"
+
     type_pi: a string;
         type of prediction interval: currently `None`
         split conformal prediction without simulation, "kde" or "bootstrap"
+
     use_factors : bool, default=False
         Whether to treat origin and development years as categorical variables
+
     random_state : int, default=42
         Random state for reproducibility
     """
@@ -99,19 +106,25 @@ class MLReserving:
         
         Parameters
         ----------
+
         data : pandas.DataFrame
             Input data with origin, development, and value columns
+
         origin_col : str, default="origin"
             Name of the origin year column
+
         development_col : str, default="development"
             Name of the development year column
+
         value_col : str, default="values"
             Name of the value column
+
         cumulated: bool, default=True
             If the triangle is cumulated
             
         Returns
         -------
+
         self : object
             Returns self
         """
@@ -215,6 +228,7 @@ class MLReserving:
         
         Returns
         -------
+
         DescribeResult
             Named tuple containing mean, lower, and upper triangles
         """
@@ -290,6 +304,7 @@ class MLReserving:
         
         Returns
         -------
+
         pandas.DataFrame
             IBNR values (mean, lower, upper) indexed by origin year
         """
@@ -307,6 +322,7 @@ class MLReserving:
         
         Returns
         -------
+
         pandas.Series
             Latest known values indexed by origin year
         """
@@ -320,6 +336,7 @@ class MLReserving:
         
         Returns
         -------
+
         pandas.DataFrame
             Ultimate loss estimates (mean, lower, upper) indexed by origin year
         """
@@ -340,6 +357,7 @@ class MLReserving:
         
         Returns
         -------
+        
         dict
             Dictionary containing two keys:
             - 'ByOrigin': DataFrame with results by origin year
