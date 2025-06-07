@@ -1,6 +1,6 @@
 # MLReserving
 
-A machine learning based reserving model for insurance claims.
+A machine learning-based reserving model for (longitudinal data) insurance claims.
 
 ## Installation
 
