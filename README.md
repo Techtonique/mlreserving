@@ -2,6 +2,10 @@
 
 A machine learning-based reserving model for (longitudinal data) insurance claims.
 
+![PyPI](https://img.shields.io/pypi/v/mlreserving) [![PyPI - License](https://img.shields.io/pypi/l/mlreserving)](./LICENSE) [![Downloads](https://pepy.tech/badge/mlreserving)](https://pepy.tech/project/mlreserving) 
+[![Documentation](https://img.shields.io/badge/documentation-is_here-green)](https://techtonique.github.io/mlreserving/)
+
+
 ## Installation
 
 ```bash
