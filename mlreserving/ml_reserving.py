@@ -138,7 +138,6 @@ class MLReserving:
         df["dev"] = df[development_col] - df[origin_col] + 1
         df["calendar"] = df[origin_col] + df["dev"] - 1
         df = df.sort_values([origin_col, "dev"])
-
         # If data is cumulated, convert to incremental first
         if self.cumulated:
             # Calculate incremental values
@@ -207,7 +206,9 @@ class MLReserving:
         
         train_data = full_data[~full_data["to_predict"]]
         test_data = full_data[full_data["to_predict"]]
-        
+
+        print("train_data", train_data)
+        print("feature_cols", feature_cols)
         # Prepare features for training
         X_train = train_data[feature_cols].values
         X_test = test_data[feature_cols].values
