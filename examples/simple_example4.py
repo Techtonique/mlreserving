@@ -44,21 +44,8 @@ for use_factors in [False, True]:
         # Make predictions with intervals
         result = model.predict()
         ibnr = model.get_ibnr()
-
-        print("\nMean predictions:")
-        print(result.mean)
-        print("\nIBNR per origin year (mean):")
-        print(ibnr.mean)
-
-        print("\nLower bound (95%):")
-        print(result.lower)
-        print("\nIBNR per origin year (lower):")
-        print(ibnr.lower)
-
-        print("\nUpper bound (95%):")
-        print(result.upper)
-        print("\nIBNR per origin year (upper):")
-        print(ibnr.upper)
+        
+        print("Summary", model.get_summary())
 
         # Display results
         print("\nMean predictions:")
