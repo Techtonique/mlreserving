@@ -141,7 +141,10 @@ class MLReserving:
         # If data is cumulated, convert to incremental first
         if self.cumulated:
             # Calculate incremental values
-            df[value_col] = df.groupby(origin_col)[value_col].diff().fillna(method='bfill')
+            try: # pandas < 2.2.0
+                df[value_col] = df.groupby(origin_col)[value_col].diff().fillna(method='bfill')
+            except Exception as e: # pandas >= 2.2.0
+                df[value_col] = df.groupby(origin_col)[value_col].diff().bfill()
 
         self.max_dev = df["dev"].max()
         self.origin_years = df[origin_col].unique()
