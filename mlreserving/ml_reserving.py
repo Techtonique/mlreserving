@@ -206,6 +206,9 @@ class MLReserving:
         self.full_data_ = deepcopy(full_data)
         self.full_data_lower_ = deepcopy(full_data)
         self.full_data_upper_ = deepcopy(full_data)
+        self.full_data_[self.value_col] = self.full_data_[self.value_col].astype("float64")       
+        self.full_data_lower_[self.value_col] = self.full_data_lower_[self.value_col].astype("float64")       
+        self.full_data_upper_[self.value_col] = self.full_data_upper_[self.value_col].astype("float64")       
         
         train_data = full_data[~full_data["to_predict"]]
         test_data = full_data[full_data["to_predict"]]
@@ -236,7 +239,7 @@ class MLReserving:
         """
         preds = self.model.predict(self.X_test_, return_pi=True)            
         
-        to_predict = self.full_data_["to_predict"]        
+        to_predict = self.full_data_["to_predict"].values        
 
         # Transform predictions back to original scale
         mean_pred = inv_arcsinh(preds.mean)
