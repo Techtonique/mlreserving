@@ -1,5 +1,5 @@
 """
-Simple example using the RAA dataset with MLReserving
+Simple example using the GenIns dataset with MLReserving
 """
 
 import pandas as pd
