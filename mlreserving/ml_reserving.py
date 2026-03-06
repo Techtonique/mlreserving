@@ -1,20 +1,3 @@
-"""
-Machine-learning based loss reserving with self-contained conformal prediction intervals.
-
-Dependencies: numpy, pandas, scikit-learn, scipy  (no nnetsauce required)
-
-Statistical notes
------------------
-* Conformal coverage guarantee holds in arcsinh-transformed space.
-  After the sinh back-transformation the intervals are approximate and
-  asymmetric; this is documented explicitly where it matters.
-* When type_pi is not None the mean is computed as the average of
-  back-transformed simulations (bias-corrected), not sinh(E[Z]).
-* log_calendar is intentionally excluded from the default feature set to
-  avoid calendar-year leakage through the scaler.  It can be re-enabled
-  via use_calendar_feature=True if the user accepts the trade-off.
-"""
-
 from __future__ import annotations
 
 import warnings
