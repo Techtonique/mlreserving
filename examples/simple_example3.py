@@ -1,5 +1,5 @@
 """
-Simple example using the RAA dataset with MLReserving
+Simple example using the Christofides2007 dataset with MLReserving
 """
 
 import pandas as pd
