@@ -7,9 +7,17 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 from scipy.stats import gaussian_kde
-from sklearn.base import BaseEstimator, RegressorMixin, clone
+from sklearn.base import clone
 from sklearn.linear_model import RidgeCV
+from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+try:
+    import chainladder as cl
+    _HAS_CHAINLADDER = True
+except ImportError:  # pragma: no cover - optional dependency
+    cl = None
+    _HAS_CHAINLADDER = False
 
 
 # ---------------------------------------------------------------------------
@@ -48,187 +56,129 @@ def _df_to_triangle(
 
 
 # ---------------------------------------------------------------------------
-# Self-contained split-conformal regressor
+# chainladder interoperability (optional dependency)
 # ---------------------------------------------------------------------------
 
-class _SplitConformalRegressor(BaseEstimator, RegressorMixin):
-    """Split-conformal prediction intervals with optional simulation.
+def _is_chainladder_triangle(obj) -> bool:
+    """Duck-type check for a chainladder.Triangle without a hard dependency."""
+    return (
+        obj.__class__.__module__.split(".")[0] == "chainladder"
+        and obj.__class__.__name__ == "Triangle"
+    )
+
+
+def _chainladder_triangle_to_long(triangle) -> tuple[pd.DataFrame, bool]:
+    """Convert a single-slice chainladder Triangle to MLReserving's long format.
+
+    Returns
+    -------
+    (long_df, is_cumulative)
+        long_df has columns ['origin', 'development', 'values'] where
+        development follows MLReserving's convention: development - origin
+        + 1 gives the 1-based development position. This mirrors the raw
+        long-format triangle data chainladder itself is typically built
+        from, so the round trip through cl.Triangle(...) reproduces the
+        original triangle exactly.
+    """
+    if triangle.shape[0] != 1 or triangle.shape[1] != 1:
+        raise ValueError(
+            "MLReserving only supports a single (index, column) triangle "
+            f"slice, got shape {triangle.shape}. Select one slice first, "
+            "e.g. triangle.iloc[0, 0] or triangle[triangle['column'] == ...]."
+        )
+
+    wide = triangle.to_frame(origin_as_datetime=False, keepdims=False)
+    wide.index.name = "origin"
+
+    long_df = (
+        wide.reset_index()
+        .melt(id_vars="origin", var_name="dev_lag", value_name="values")
+        .dropna(subset=["values"])
+    )
+    long_df["origin"] = long_df["origin"].astype(str).astype(int)
+
+    lag_order = sorted(long_df["dev_lag"].unique())
+    lag_to_pos = {lag: i + 1 for i, lag in enumerate(lag_order)}
+    long_df["development"] = (
+        long_df["origin"] + long_df["dev_lag"].map(lag_to_pos) - 1
+    )
+
+    long_df = (
+        long_df[["origin", "development", "values"]]
+        .sort_values(["origin", "development"])
+        .reset_index(drop=True)
+    )
+    return long_df, bool(triangle.is_cumulative)
+
+
+def _wide_to_chainladder_triangle(
+    wide: pd.DataFrame,
+    obs_mask_wide: pd.DataFrame,
+    cumulative: bool,
+) -> "cl.Triangle":
+    """Convert a completed (observed + predicted) origin x dev-position wide
+    DataFrame to a chainladder.Triangle.
+
+    chainladder infers its origin/development shape from calendar-like
+    dates. Feeding it an already-completed square directly is unsafe: cells
+    that used to be future/NaN now carry real values whose synthetic
+    "development" label (origin + dev_position - 1) can exceed the max
+    origin, which makes chainladder mistake future diagonals for new origin
+    periods and inflate the triangle shape. To avoid this we:
+
+      1. Build a "skeleton" Triangle from *only* the observed cells (a
+         genuine ragged upper triangle, for which the calendar inference is
+         well-behaved and reproduces the exact origin/development shape).
+      2. Overwrite that skeleton's underlying value array with the fully
+         completed values from `wide`, which are already correctly
+         cumulated/incremented and origin/column-ordered the same way.
 
     Parameters
     ----------
-    base_model : sklearn-compatible regressor
-        Any estimator with fit() / predict().  Cloned internally.
-    level : float
-        Coverage level in percent (e.g. 95 -> 95% intervals).
-    type_pi : {None, 'bootstrap', 'kde'}
-        None        -> plain symmetric conformal band.
-        'bootstrap' -> resample calibration residuals (faster).
-        'kde'       -> KDE-smoothed residual distribution.
-    replications : int or None
-        Simulation draws when type_pi is not None.  Defaults to 200.
-    calibration_fraction : float
-        Fraction of training rows reserved for conformal calibration,
-        taken from the *end* of the sorted sequence to respect time order.
-    random_state : int
-
-    Attributes (post-fit)
-    ----------------------
-    _residuals       : signed calibration residuals (y_cal - y_hat_cal)
-    _abs_residuals   : |_residuals|
-    _quantile        : finite-sample conformal half-width (plain mode)
-    _last_sims       : (n_test, reps) array in arcsinh space (simulation mode)
+    wide : pd.DataFrame
+        Completed triangle, origin (ascending) x dev position 1..N (ascending).
+    obs_mask_wide : pd.DataFrame
+        Boolean frame, same shape/index/columns as wide; True where the cell
+        was originally observed (vs. predicted).
+    cumulative : bool
     """
+    if not _HAS_CHAINLADDER:
+        raise ImportError(
+            "The optional 'chainladder' package is required for this method. "
+            "Install it with `pip install chainladder`."
+        )
 
-    def __init__(
-        self,
-        base_model=None,
-        level: float = 95,
-        type_pi: str | None = None,
-        replications: int | None = None,
-        calibration_fraction: float = 0.5,
-        random_state: int = 42,
-    ) -> None:
-        if base_model is None:
-            base_model = RidgeCV(alphas=np.logspace(-4, 2, 30))
-        self.base_model = base_model
-        self.level = level
-        self.type_pi = type_pi
-        self.replications = replications
-        self.calibration_fraction = calibration_fraction
-        self.random_state = random_state
+    observed_long = (
+        wide.where(obs_mask_wide)
+        .reset_index()
+        .rename(columns={wide.index.name or "index": "origin"})
+        .melt(id_vars="origin", var_name="dev", value_name="values")
+        .dropna(subset=["values"])
+    )
+    observed_long["development"] = (
+        observed_long["origin"].astype(int) + observed_long["dev"].astype(int) - 1
+    )
 
-        self.alpha_: float = 1.0 - level / 100.0
-        self._fitted_model = None
-        self._residuals: np.ndarray | None = None
-        self._abs_residuals: np.ndarray | None = None
-        self._quantile: float | None = None
-        self._last_sims: np.ndarray | None = None   # (n_test, reps), arcsinh space
+    skeleton = cl.Triangle(
+        observed_long[["origin", "development", "values"]],
+        origin="origin",
+        development="development",
+        columns="values",
+        cumulative=cumulative,
+    )
 
-    # ------------------------------------------------------------------
-    def fit(self, X: np.ndarray, y: np.ndarray) -> "_SplitConformalRegressor":
-        """Sequential split: first (1-cal_frac) rows train, last cal_frac calibrate.
+    if skeleton.shape[-2:] != wide.shape:
+        raise ValueError(
+            "Could not align the predicted triangle with chainladder's "
+            f"inferred shape ({skeleton.shape[-2:]} vs {wide.shape}). This "
+            "can happen with non-contiguous origin years."
+        )
 
-        Sequential (rather than random) split respects the time ordering of
-        the loss triangle: earlier observed cells train the model, later
-        observed cells calibrate the conformal band.
-        """
-        n = X.shape[0]
-        split = int(n * (1.0 - self.calibration_fraction))
-        split = max(split, 1)      # guarantee at least one training sample
-        split = min(split, n - 1)  # guarantee at least one calibration sample
-
-        n_cal = n - split
-        if n_cal < 10:
-            warnings.warn(
-                f"Only {n_cal} calibration samples available. Conformal coverage "
-                "may be unreliable. Consider reducing calibration_fraction or "
-                "using a larger triangle.",
-                UserWarning,
-                stacklevel=2,
-            )
-        if self.type_pi == "kde" and n_cal < 30:
-            warnings.warn(
-                f"KDE fitted on only {n_cal} residuals; bandwidth estimation may "
-                "be unstable. Consider type_pi='bootstrap' for small calibration sets.",
-                UserWarning,
-                stacklevel=2,
-            )
-
-        X_train, X_cal = X[:split], X[split:]
-        y_train, y_cal = y[:split], y[split:]
-
-        self._fitted_model = clone(self.base_model)
-        self._fitted_model.fit(X_train, y_train)
-
-        preds_cal = self._fitted_model.predict(X_cal)
-        self._residuals = y_cal - preds_cal
-        self._abs_residuals = np.abs(self._residuals)
-
-        # Finite-sample-corrected conformal quantile (Vovk et al. 2005):
-        #   k = ceil((n_cal + 1) * (1 - alpha)), then take the k-th order statistic.
-        # This guarantees exact marginal coverage (unlike raw np.quantile).
-        k = int(np.ceil((n_cal + 1) * (1.0 - self.alpha_)))
-        k = min(k, n_cal)
-        self._quantile = float(np.sort(self._abs_residuals)[k - 1])
-
-        return self
-
-    # ------------------------------------------------------------------
-    def predict(
-        self,
-        X: np.ndarray,
-        return_pi: bool = False,
-    ) -> np.ndarray | DescribeResult:
-        """Point predictions, optionally with prediction intervals.
-
-        All values are returned in arcsinh-transformed space.
-        Back-transformation and bias correction are applied by the caller.
-
-        Parameters
-        ----------
-        X : (n_test, n_features) array
-        return_pi : bool
-
-        Returns
-        -------
-        np.ndarray  or  DescribeResult(mean, lower, upper)
-        """
-        if self._fitted_model is None:
-            raise ValueError("Call fit() before predict().")
-
-        point = self._fitted_model.predict(X)
-
-        if not return_pi:
-            return point
-
-        use_simulation = (self.replications is not None) or (self.type_pi is not None)
-
-        if use_simulation:
-            mean_, lower_, upper_ = self._simulate_intervals(point)
-            # _last_sims stored for bias-corrected back-transform in caller
-            return DescribeResult(mean_, lower_, upper_)
-        else:
-            # Plain symmetric conformal band; coverage exact in arcsinh space
-            return DescribeResult(point, point - self._quantile, point + self._quantile)
-
-    # ------------------------------------------------------------------
-    def _simulate_intervals(
-        self, point: np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Draw residual simulations; populate _last_sims; return (mean, lower, upper).
-
-        _last_sims has shape (n_obs, replications) and is in arcsinh space.
-        """
-        n_obs = len(point)
-        reps = self.replications if self.replications is not None else 200
-        pi_type = self.type_pi if self.type_pi is not None else "kde"
-
-        if pi_type not in ("bootstrap", "kde"):
-            raise ValueError("type_pi must be 'bootstrap', 'kde', or None.")
-
-        rng = np.random.default_rng(self.random_state)
-
-        if pi_type == "bootstrap":
-            idx = rng.integers(0, len(self._residuals), size=(n_obs, reps))
-            residual_draws = self._residuals[idx]   # (n_obs, reps)
-        else:  # kde
-            kde = gaussian_kde(self._residuals)
-            draws_flat = kde.resample(
-                size=n_obs * reps, seed=int(self.random_state)
-            ).ravel()
-            residual_draws = draws_flat.reshape(n_obs, reps)
-
-        self._last_sims = point[:, None] + residual_draws  # (n_obs, reps), arcsinh space
-
-        q_lo = self.alpha_ / 2.0
-        q_hi = 1.0 - self.alpha_ / 2.0
-        lower_ = np.quantile(self._last_sims, q=q_lo, axis=1)
-        upper_ = np.quantile(self._last_sims, q=q_hi, axis=1)
-        # Mean in arcsinh space returned here; bias-corrected mean in original
-        # space is computed by caller via mean(sinh(sims)).
-        mean_ = self._last_sims.mean(axis=1)
-
-        return mean_, lower_, upper_
+    filled = skeleton.copy()
+    vals = filled.values.copy()
+    vals[0, 0, :, :] = wide.values
+    filled.values = vals
+    return filled
 
 
 # ---------------------------------------------------------------------------
@@ -244,7 +194,7 @@ class MLReserving:
        set to its cumulative value; no bfill artefact).
     2. arcsinh variance-stabilising transform on observed incremental cells.
     3. Feature matrix built from training cells only; scaler fit on training.
-    4. _SplitConformalRegressor fit (sequential split respecting time order).
+    4. Conformal residuals computed (sequential split respecting time order).
     5. Predict unobserved cells in arcsinh space.
     6. Back-transform:
        - Simulation mode: mean = mean(sinh(Z_sim)) over replications
@@ -269,13 +219,32 @@ class MLReserving:
         Defaults to RidgeCV with a log-spaced alpha grid.
     level : float
         Coverage level in percent (default 95).
-    type_pi : {None, 'bootstrap', 'kde'}
+    type_pi : {None, 'bootstrap', 'kde', 'gaussian_mixture'}
         Simulation strategy for prediction intervals.
+        'gaussian_mixture' fits a sklearn GaussianMixture to the residuals
+        (number of components chosen by BIC unless gmm_n_components is set).
     replications : int or None
         Number of simulation draws when type_pi is not None.
     calibration_fraction : float
         Fraction of observed cells held back for conformal calibration
         (time-ordered: later cells -> calibration). Default 0.5.
+        Ignored when residual_source='in_sample'.
+    residual_source : {'calibration', 'in_sample'}
+        'calibration' (default) -> classical split-conformal: the model is
+            fit on a training split and residuals come from a held-out
+            calibration split (see calibration_fraction). This is what
+            gives the plain (type_pi=None) band its finite-sample coverage
+            guarantee.
+        'in_sample' -> the model is fit on *all* observed cells, and the
+            residual distribution used for simulation (type_pi='bootstrap'
+            /'kde'/'gaussian_mixture') is estimated from the in-sample
+            fitting errors instead. Uses every observed cell for fitting;
+            loses the formal conformal coverage guarantee, but is more
+            robust with small triangles where a calibration split would
+            leave too few residuals to fit a KDE/Gaussian Mixture.
+    gmm_n_components : int or None
+        Number of components for type_pi='gaussian_mixture'. None (default)
+        selects the best of 1-4 components by BIC.
     use_factors : bool
         True  -> OneHotEncode origin + development period as features.
         False -> log(origin), log(dev) only (default; no calendar leakage).
@@ -294,6 +263,8 @@ class MLReserving:
         type_pi: str | None = None,
         replications: int | None = None,
         calibration_fraction: float = 0.5,
+        residual_source: str = "calibration",
+        gmm_n_components: int | None = None,
         use_factors: bool = False,
         use_calendar_feature: bool = False,
         random_state: int = 42,
@@ -306,6 +277,8 @@ class MLReserving:
         self.type_pi = type_pi
         self.replications = replications
         self.calibration_fraction = calibration_fraction
+        self.residual_source = residual_source
+        self.gmm_n_components = gmm_n_components
         self.use_factors = use_factors
         self.use_calendar_feature = use_calendar_feature
         self.random_state = random_state
@@ -328,7 +301,13 @@ class MLReserving:
         self.ultimate_upper_: pd.Series | None = None
 
         # Internal fitted objects
-        self._conformal: _SplitConformalRegressor | None = None
+        self.alpha_: float = 1.0 - level / 100.0
+        self._fitted_model = None                     # fitted base regressor (arcsinh space)
+        self._residuals: np.ndarray | None = None      # signed residuals (arcsinh space)
+        self._abs_residuals: np.ndarray | None = None
+        self._quantile: float | None = None            # plain-mode conformal half-width
+        self._last_sims: np.ndarray | None = None      # (n_test, reps), arcsinh space
+        self._gmm: GaussianMixture | None = None        # cached fitted GaussianMixture
         self._scaler: StandardScaler = StandardScaler()
         self._origin_encoder: OneHotEncoder = OneHotEncoder(
             sparse_output=False, handle_unknown="ignore"
@@ -340,12 +319,19 @@ class MLReserving:
         self._full_data: pd.DataFrame | None = None   # long-format, incremental
         self._X_test: np.ndarray | None = None        # scaled test features
 
+        # chainladder interop
+        self._input_was_triangle: bool = False
+        self._last_mean_triangle_: pd.DataFrame | None = None
+        self._last_lower_triangle_: pd.DataFrame | None = None
+        self._last_upper_triangle_: pd.DataFrame | None = None
+
     # ------------------------------------------------------------------
     def __repr__(self) -> str:
         return (
             f"MLReserving(level={self.level}, type_pi={self.type_pi!r}, "
             f"replications={self.replications}, "
             f"calibration_fraction={self.calibration_fraction}, "
+            f"residual_source={self.residual_source!r}, "
             f"use_factors={self.use_factors}, "
             f"use_calendar_feature={self.use_calendar_feature})"
         )
@@ -454,27 +440,50 @@ class MLReserving:
 
     def fit(
         self,
-        data: pd.DataFrame,
+        data,
         origin_col: str = "origin",
         development_col: str = "development",
         value_col: str = "values",
-        cumulated: bool = True,
+        cumulated: bool | None = None,
     ) -> "MLReserving":
         """Fit the ML reserving model.
 
         Parameters
         ----------
-        data : pd.DataFrame
-            Long-format triangle.  Upper-right (future) cells should be absent
-            or NaN.  Must contain origin_col, development_col, value_col.
+        data : pd.DataFrame or chainladder.Triangle
+            Long-format triangle DataFrame (default): upper-right (future)
+            cells should be absent or NaN, and it must contain origin_col,
+            development_col, value_col.
+
+            Alternatively, a single-slice ``chainladder.Triangle`` object
+            (e.g. ``cl.load_sample('raa')``) can be passed directly --
+            origin_col/development_col/value_col are then ignored, and
+            ``cumulated`` is inferred from ``triangle.is_cumulative`` unless
+            explicitly overridden. This requires the optional 'chainladder'
+            package.
         origin_col, development_col, value_col : str
-        cumulated : bool
-            True if value_col contains cumulative losses; False if incremental.
+            Ignored when data is a chainladder.Triangle.
+        cumulated : bool or None
+            True if value_col contains cumulative losses; False if
+            incremental. When data is a chainladder.Triangle and cumulated
+            is left at its default (True) it is instead inferred from
+            ``triangle.is_cumulative`` -- pass True/False explicitly to
+            force a specific interpretation.
 
         Returns
         -------
         self
         """
+        self._input_was_triangle = _is_chainladder_triangle(data)
+
+        if self._input_was_triangle:
+            data, inferred_cumulated = _chainladder_triangle_to_long(data)
+            origin_col, development_col, value_col = "origin", "development", "values"
+            if cumulated is None:
+                cumulated = inferred_cumulated
+        elif cumulated is None:
+            cumulated = True
+
         self._validate_input(data, origin_col, development_col, value_col)
 
         self.origin_col = origin_col
@@ -553,18 +562,206 @@ class MLReserving:
             full_data.loc[train_mask, value_col].astype(float).values
         )
 
-        # ---- Fit conformal regressor ---------------------------------------
-        self._conformal = _SplitConformalRegressor(
-            base_model=self._base_model,
-            level=self.level,
-            type_pi=self.type_pi,
-            replications=self.replications,
-            calibration_fraction=self.calibration_fraction,
-            random_state=self.random_state,
-        )
-        self._conformal.fit(X_train, y_train)
+        # ---- Fit base model & compute conformal residuals ------------------
+        self._fit_conformal(X_train, y_train)
 
         return self
+
+    # ------------------------------------------------------------------
+    # Conformal machinery (merged from the former _SplitConformalRegressor)
+    # ------------------------------------------------------------------
+
+    def _fit_conformal(self, X: np.ndarray, y: np.ndarray) -> None:
+        """Fit the base model and compute residuals for calibration/simulation.
+
+        residual_source='calibration' (default): sequential split -- first
+        (1-cal_frac) rows train, last cal_frac calibrate. Sequential (rather
+        than random) split respects the time ordering of the loss triangle:
+        earlier observed cells train the model, later observed cells
+        calibrate the conformal band.
+
+        residual_source='in_sample': the model is fit on *all* rows and
+        residuals are the in-sample fitting errors (y - y_hat). No rows are
+        held back.
+        """
+        if self.residual_source not in ("calibration", "in_sample"):
+            raise ValueError(
+                "residual_source must be 'calibration' or 'in_sample', "
+                f"got {self.residual_source!r}."
+            )
+
+        n = X.shape[0]
+
+        if self.residual_source == "in_sample":
+            self._fitted_model = clone(self._base_model)
+            self._fitted_model.fit(X, y)
+
+            preds_train = self._fitted_model.predict(X)
+            self._residuals = y - preds_train
+            self._abs_residuals = np.abs(self._residuals)
+            n_res = n
+
+            if n_res < 30 and self.type_pi in ("kde", "gaussian_mixture"):
+                warnings.warn(
+                    f"{self.type_pi!r} fitted on only {n_res} in-sample residuals; "
+                    "the fitted distribution may be unstable. Consider "
+                    "type_pi='bootstrap' for small triangles.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+        else:
+            split = int(n * (1.0 - self.calibration_fraction))
+            split = max(split, 1)      # guarantee at least one training sample
+            split = min(split, n - 1)  # guarantee at least one calibration sample
+
+            n_res = n - split
+            if n_res < 10:
+                warnings.warn(
+                    f"Only {n_res} calibration samples available. Conformal coverage "
+                    "may be unreliable. Consider reducing calibration_fraction or "
+                    "using a larger triangle.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            if self.type_pi in ("kde", "gaussian_mixture") and n_res < 30:
+                warnings.warn(
+                    f"{self.type_pi!r} fitted on only {n_res} residuals; distribution "
+                    "estimation may be unstable. Consider type_pi='bootstrap' for "
+                    "small calibration sets, or residual_source='in_sample'.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+
+            X_train, X_cal = X[:split], X[split:]
+            y_train, y_cal = y[:split], y[split:]
+
+            self._fitted_model = clone(self._base_model)
+            self._fitted_model.fit(X_train, y_train)
+
+            preds_cal = self._fitted_model.predict(X_cal)
+            self._residuals = y_cal - preds_cal
+            self._abs_residuals = np.abs(self._residuals)
+
+        # Finite-sample-corrected conformal quantile (Vovk et al. 2005):
+        #   k = ceil((n_res + 1) * (1 - alpha)), then take the k-th order statistic.
+        # Exact marginal coverage holds only for residual_source='calibration';
+        # with 'in_sample' this is a heuristic band (residuals are not held-out).
+        k = int(np.ceil((n_res + 1) * (1.0 - self.alpha_)))
+        k = min(k, n_res)
+        self._quantile = float(np.sort(self._abs_residuals)[k - 1])
+
+        # Reset cached GMM: a new fit invalidates any previously fitted mixture.
+        self._gmm = None
+
+    # ------------------------------------------------------------------
+    def _predict_conformal(
+        self,
+        X: np.ndarray,
+        return_pi: bool = False,
+    ) -> np.ndarray | DescribeResult:
+        """Point predictions from the base model, optionally with intervals.
+
+        All values are returned in arcsinh-transformed space.
+        Back-transformation and bias correction are applied by the caller.
+        """
+        if self._fitted_model is None:
+            raise ValueError("Call fit() before predict().")
+
+        point = self._fitted_model.predict(X)
+
+        if not return_pi:
+            return point
+
+        use_simulation = (self.replications is not None) or (self.type_pi is not None)
+
+        if use_simulation:
+            mean_, lower_, upper_ = self._simulate_intervals(point)
+            # _last_sims stored for bias-corrected back-transform in caller
+            return DescribeResult(mean_, lower_, upper_)
+        else:
+            # Plain symmetric conformal band; coverage exact in arcsinh space
+            return DescribeResult(point, point - self._quantile, point + self._quantile)
+
+    # ------------------------------------------------------------------
+    def _simulate_intervals(
+        self, point: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Draw residual simulations; populate _last_sims; return (mean, lower, upper).
+
+        _last_sims has shape (n_obs, replications) and is in arcsinh space.
+        """
+        n_obs = len(point)
+        reps = self.replications if self.replications is not None else 200
+        pi_type = self.type_pi if self.type_pi is not None else "kde"
+
+        if pi_type not in ("bootstrap", "kde", "gaussian_mixture"):
+            raise ValueError(
+                "type_pi must be 'bootstrap', 'kde', 'gaussian_mixture', or None."
+            )
+
+        rng = np.random.default_rng(self.random_state)
+
+        if pi_type == "bootstrap":
+            idx = rng.integers(0, len(self._residuals), size=(n_obs, reps))
+            residual_draws = self._residuals[idx]   # (n_obs, reps)
+        elif pi_type == "kde":
+            kde = gaussian_kde(self._residuals)
+            draws_flat = kde.resample(
+                size=n_obs * reps, seed=int(self.random_state)
+            ).ravel()
+            residual_draws = draws_flat.reshape(n_obs, reps)
+        else:  # gaussian_mixture
+            # GaussianMixture.sample() returns draws grouped by component
+            # (not shuffled); shuffle before reshaping so each (origin, rep)
+            # cell draws from a random component rather than a biased block.
+            flat_draws = self._sample_gaussian_mixture(n_obs * reps)
+            rng.shuffle(flat_draws)
+            residual_draws = flat_draws.reshape(n_obs, reps)
+
+        self._last_sims = point[:, None] + residual_draws  # (n_obs, reps), arcsinh space
+
+        q_lo = self.alpha_ / 2.0
+        q_hi = 1.0 - self.alpha_ / 2.0
+        lower_ = np.quantile(self._last_sims, q=q_lo, axis=1)
+        upper_ = np.quantile(self._last_sims, q=q_hi, axis=1)
+        # Mean in arcsinh space returned here; bias-corrected mean in original
+        # space is computed by caller via mean(sinh(sims)).
+        mean_ = self._last_sims.mean(axis=1)
+
+        return mean_, lower_, upper_
+
+    # ------------------------------------------------------------------
+    def _sample_gaussian_mixture(self, n_draws: int) -> np.ndarray:
+        """Fit (once, cached) a Gaussian Mixture on residuals and sample from it.
+
+        If gmm_n_components is None, the number of components is chosen
+        from {1, 2, 3, 4} (capped by n_residuals - 1) by lowest BIC.
+        """
+        if self._gmm is None:
+            residuals_2d = self._residuals.reshape(-1, 1)
+            n_res = residuals_2d.shape[0]
+
+            if self.gmm_n_components is not None:
+                n_components = max(1, min(self.gmm_n_components, n_res))
+                best_gmm = GaussianMixture(
+                    n_components=n_components,
+                    random_state=self.random_state,
+                ).fit(residuals_2d)
+            else:
+                candidates = [k for k in (1, 2, 3, 4) if k <= n_res]
+                candidates = candidates or [1]
+                fitted = []
+                for k in candidates:
+                    gmm_k = GaussianMixture(
+                        n_components=k, random_state=self.random_state
+                    ).fit(residuals_2d)
+                    fitted.append((gmm_k.bic(residuals_2d), gmm_k))
+                best_gmm = min(fitted, key=lambda t: t[0])[1]
+
+            self._gmm = best_gmm
+
+        draws, _ = self._gmm.sample(n_draws)
+        return draws.ravel()
 
     # ------------------------------------------------------------------
 
@@ -582,7 +779,7 @@ class MLReserving:
             Each field is a pd.DataFrame (origin x development period).
             Rows = origin years, columns = development lags (integer).
         """
-        if self._conformal is None:
+        if self._fitted_model is None:
             raise ValueError("Call fit() before predict().")
 
         test_mask = self._full_data["to_predict"].values
@@ -595,16 +792,19 @@ class MLReserving:
             self.ultimate_lower_ = self.latest_cumulative_.copy()
             self.ultimate_upper_ = self.latest_cumulative_.copy()
             tri = _df_to_triangle(self._full_data, self.origin_col, "dev", self.value_col)
+            self._last_mean_triangle_ = tri
+            self._last_lower_triangle_ = tri.copy()
+            self._last_upper_triangle_ = tri.copy()
             return DescribeResult(tri, tri.copy(), tri.copy())
 
         # ---- Predict in arcsinh space --------------------------------------
-        raw = self._conformal.predict(self._X_test, return_pi=True)
+        raw = self._predict_conformal(self._X_test, return_pi=True)
 
         use_simulation = (self.replications is not None) or (self.type_pi is not None)
 
-        if use_simulation and self._conformal._last_sims is not None:
+        if use_simulation and self._last_sims is not None:
             # Bias-corrected mean: average of sinh(simulations) in original space
-            sims_orig = np.maximum(0.0, _inv_arcsinh(self._conformal._last_sims))
+            sims_orig = np.maximum(0.0, _inv_arcsinh(self._last_sims))
             mean_inc = sims_orig.mean(axis=1)
         else:
             mean_inc = np.maximum(0.0, _inv_arcsinh(raw.mean))
@@ -636,6 +836,10 @@ class MLReserving:
         mean_tri = self._build_triangle(mean_inc, test_mask)
         lower_tri = self._build_triangle(lower_inc, test_mask)
         upper_tri = self._build_triangle(upper_inc, test_mask)
+
+        self._last_mean_triangle_ = mean_tri
+        self._last_lower_triangle_ = lower_tri
+        self._last_upper_triangle_ = upper_tri
 
         return DescribeResult(mean_tri, lower_tri, upper_tri)
 
@@ -725,6 +929,53 @@ class MLReserving:
             raise ValueError("Call fit() before get_latest().")
         return self.latest_cumulative_.copy()
 
+    # ------------------------------------------------------------------
+    # chainladder interoperability
+    # ------------------------------------------------------------------
+
+    def to_triangle(
+        self, which: Literal["mean", "lower", "upper"] = "mean"
+    ) -> "cl.Triangle":
+        """Return the completed (observed + predicted) triangle as a
+        chainladder.Triangle object.
+
+        This lets MLReserving's output feed straight into the chainladder
+        ecosystem -- e.g. ``triangle.plot()``, other chainladder estimators,
+        or ``triangle.link_ratio``. Works regardless of whether fit() was
+        given a plain long-format DataFrame or a chainladder.Triangle.
+
+        Parameters
+        ----------
+        which : {'mean', 'lower', 'upper'}
+            Which of the three predicted triangles to convert.
+
+        Returns
+        -------
+        chainladder.Triangle
+
+        Raises
+        ------
+        ImportError
+            If the optional 'chainladder' package is not installed.
+        ValueError
+            If predict() has not been called yet, or which is invalid.
+        """
+        if which not in ("mean", "lower", "upper"):
+            raise ValueError("which must be 'mean', 'lower', or 'upper'.")
+
+        wide = getattr(self, f"_last_{which}_triangle_")
+        if wide is None:
+            raise ValueError("Call predict() before to_triangle().")
+
+        obs_mask_wide = _df_to_triangle(
+            self._full_data, self.origin_col, "dev", "to_predict"
+        ).reindex(index=wide.index, columns=wide.columns)
+        obs_mask_wide = ~obs_mask_wide.astype(bool)
+
+        return _wide_to_chainladder_triangle(
+            wide, obs_mask_wide=obs_mask_wide, cumulative=bool(self.cumulated)
+        )
+
     def get_residual_diagnostics(self) -> dict:
         """Calibration residuals for diagnostic plots and coverage assessment.
 
@@ -735,12 +986,12 @@ class MLReserving:
             'abs_residuals' : absolute values of calibration residuals
             'quantile'      : finite-sample conformal half-width (plain mode)
         """
-        if self._conformal is None or self._conformal._residuals is None:
+        if self._fitted_model is None or self._residuals is None:
             raise ValueError("Call fit() before get_residual_diagnostics().")
         return {
-            "residuals": self._conformal._residuals.copy(),
-            "abs_residuals": self._conformal._abs_residuals.copy(),
-            "quantile": self._conformal._quantile,
+            "residuals": self._residuals.copy(),
+            "abs_residuals": self._abs_residuals.copy(),
+            "quantile": self._quantile,
         }
 
     def get_summary(self) -> dict:
