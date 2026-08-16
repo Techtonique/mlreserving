@@ -1,6 +1,7 @@
-nnetsauce>=0.17.0
-numpy>=1.20.0
-pandas>=1.3.0
-scikit-learn>=1.0.0
-joblib>=1.1.0
-chainladder
+nnetsauce
+numpy
+pandas
+scikit-learn
+joblib
+chainladder>=0.10.0
+IPython
