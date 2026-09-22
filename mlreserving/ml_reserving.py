@@ -804,7 +804,7 @@ class MLReserving:
 
         if use_simulation and self._last_sims is not None:
             # Bias-corrected mean: average of sinh(simulations) in original space
-            sims_orig = _inv_arcsinh(self._conformal._last_sims)
+            sims_orig = _inv_arcsinh(self._last_sims)
             mean_inc = sims_orig.mean(axis=1)
         else:
             mean_inc = _inv_arcsinh(raw.mean)
