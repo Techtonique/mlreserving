@@ -1,0 +1,7 @@
+nnetsauce
+numpy
+pandas
+scikit-learn
+joblib
+chainladder>=0.10.0
+IPython
