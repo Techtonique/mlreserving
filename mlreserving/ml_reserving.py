@@ -804,13 +804,13 @@ class MLReserving:
 
         if use_simulation and self._last_sims is not None:
             # Bias-corrected mean: average of sinh(simulations) in original space
-            sims_orig = np.maximum(0.0, _inv_arcsinh(self._last_sims))
+            sims_orig = _inv_arcsinh(self._last_sims)
             mean_inc = sims_orig.mean(axis=1)
         else:
-            mean_inc = np.maximum(0.0, _inv_arcsinh(raw.mean))
+            mean_inc = _inv_arcsinh(raw.mean)
 
-        lower_inc = np.maximum(0.0, _inv_arcsinh(raw.lower))
-        upper_inc = np.maximum(0.0, _inv_arcsinh(raw.upper))
+        lower_inc = _inv_arcsinh(raw.lower)
+        upper_inc = _inv_arcsinh(raw.upper)
 
         # ---- IBNR per origin year ------------------------------------------
         origins_test = self._full_data.loc[test_mask, self.origin_col].values
